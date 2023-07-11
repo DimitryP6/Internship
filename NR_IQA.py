@@ -8,6 +8,8 @@ Created on Fri Jun 23 21:29:19 2023
 import numpy as np
 import time
 from scipy import signal
+import os
+from sklearn.linear_model import LinearRegression
 st = time.time()
 """
 BLUR
@@ -21,12 +23,24 @@ def show_ct_dicom(path):
     #convert from houndsfield to pixel
     dicom = pydicom.read_file(path)
     data = dicom.pixel_array   
+    bound = int((np.shape(data)[0]-(np.shape(data)[0]/np.sqrt(2)))/2)  
+    data = data[(bound-2):-(bound+2), (bound-2):-(bound+2)]
+    n = 0
+    while n<4:
+        top = (data[0]<-100) | (3000<data[0])
+        s = np.sum(top)
+        #less than 5 percent invalid
+        if s<(int(0.05*data[0].size)):
+            n+=1
+            data = np.rot90(data)
+        # if 5 percent or more invalid take off top row
+        else:
+            data = np.delete(data, 0, 0)
+            n=0
     data = data - dicom.RescaleIntercept
     data = data / dicom.RescaleSlope
     data = (data * 255).astype(np.uint8)
-    bound = int((np.shape(data)[0]-(np.shape(data)[0]/np.sqrt(2)))/2)  
-    return data[(bound-2):-(bound+2), (bound-2):-(bound+2)]
-    # return data
+    return data
 
 
 
@@ -66,10 +80,10 @@ def Blur_Statistics(img):
     
     
     blur_sum = np.sum(np.where(BR < Th_b, BR , 0))
-    blur_count = np.sum(BR < Th_b)
+    blur_count = np.sum(BR < Th_b) 
     edge_count = np.sum(E_h) + np.sum(E_v == E_h, where = 1)
     #Blur Mean, Blur Ratio
-    return(blur_sum/blur_count, blur_count/edge_count)
+    return(blur_sum/blur_count if blur_count != 0 else 0, blur_count/edge_count if edge_count != 0 else 0)
 
 """
 NOISE
@@ -95,7 +109,7 @@ def Noise_Statistics(img):
     noise_sum = np.average(N)
     noise_count = np.sum(N_cand>N_candm)
     #noise mean and noise ratio
-    return (noise_sum/noise_count, noise_count/(np.shape(img)[0]*np.shape(img)[1]))
+    return (noise_sum/noise_count if noise_count != 0 else 0, noise_count/(np.shape(img)[0]*np.shape(img)[1]))
 
 # """
 # COMBINATION OF BLUR AND NOISE
@@ -112,15 +126,45 @@ def blur_noise_metric(img):
     blur_ratio = Blur_Statistics(img)[1]
     noise_mean = Noise_Statistics(img)[0]
     noise_ratio = Noise_Statistics(img)[1]
-    print(f"Blur Mean:{blur_mean}\nBlur Ratio: {blur_ratio}\nNoise Mean: {noise_mean}\nNoise Ratio: {noise_ratio} ")
-    return (f"BLUR AND NOISE SCORE: {1-(w1*blur_mean+w2*blur_ratio+w3*noise_mean+w4*noise_ratio)}")
+    #print(f"Blur Mean:{blur_mean}\nBlur Ratio: {blur_ratio}\nNoise Mean: {noise_mean}\nNoise Ratio: {noise_ratio} ")
+    return (1-(w1*blur_mean+w2*blur_ratio+w3*noise_mean+w4*noise_ratio))
 
-img = show_ct_dicom("t1.dcm")
-plt.figure(figsize = (13,13))
-plt.imshow(img, 'gray')
-print(blur_noise_metric(img))
+
+
+def test():
+    x = []
+    y = []
+    for file in os.listdir('dicom_test'):
+        dt = os.fsdecode(file)
+        dt = f"dicom_test/{dt}"
+        dicom= pydicom.read_file(dt)
+        img = show_ct_dicom(dt)
+        EXP = dicom.Exposure
+        bnm = blur_noise_metric(img)
+        x.append(EXP)
+        y.append(bnm)
+        
+    coef = np.polyfit(x,y,1)
+    poly1d_fn = np.poly1d(coef) 
+    plt.plot(x,y, 'mo', x, poly1d_fn(x), '--k')
+    x = np.array(x)
+    y = np.array(y)
+    x = x[:, None]
+    model = LinearRegression()
+    model.fit(x, y)
+    y_predict = model.predict(x)
+    corr_matrix = np.corrcoef(y, y_predict)
+    corr = corr_matrix[0,1]
+    print(corr)
+
     
+    return
 
+test()
 
-et = time.time()
-print(f"Runtime: {et-st}")
+# img = show_ct_dicom("t1.dcm")
+# plt.figure(figsize = (13,13))
+# plt.imshow(img, 'gray')
+# print(blur_noise_metric(img))
+
+print(f"Runtime: {time.time()-st}")
